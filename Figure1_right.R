@@ -3,15 +3,13 @@ rm(list = ls())
 library(VGAM)
 library(truncdist)
 library(latex2exp)
-library(knitr)
-library(kableExtra)
-library(ggplot2)
 
-real_l <- 1; real_u <- 35
-l <- log(real_l); u <- log(real_u)
+real_l <- 1; real_u <- 35 # actual search region
+l <- log(real_l); u <- log(real_u) # search region on log-scale
 
+# signal parameters:
 mean_sig <- 3.5; sd_sig <- sqrt(0.01*3.5^2)
-eps <- 1e-3
+eps <- 1e-3 # 1 - mass of the signal region
 
 # SIGNAL DENSITY:
 fs <- function(x, mean = mean_sig, sd = sd_sig)
@@ -27,32 +25,34 @@ Fs <- function(x, mean = mean_sig, sd = sd_sig)
                 mean = mean, sd = sd))
 }
 
+# loading physics data to estimate the parameter of the benchmark model via MLE:
 dat <- read.table('Fermi_LAT_physics.txt', header = TRUE)$x
 x <- log(dat)
 N <- length(x)
 k <- 1e2
 bin_ends <- seq(l, u, length.out = k+1)
 xi <- (bin_ends[1:k] + bin_ends[2:(k+1)])/2
-ni <- ni <- sapply(1:k, function(i){
+ni <- sapply(1:k, function(i){
   sum((x > bin_ends[i])&(x <= bin_ends[i+1]))
 })
 
-qb_y_model <- function(beta){
-  qb_mass <- (1/beta)*((l+1)^(-beta) - (u+1)^(-beta))
-  qb_i <- sapply(x, function(t){
-    ((t+1)^(-beta-1))/qb_mass
+# negative log-likelihood using the benchmark background model q_\alpha, a shifted power-law density
+q_model <- function(beta){
+  q_mass <- (1/beta)*((l+1)^(-beta) - (u+1)^(-beta))
+  q_i <- sapply(x, function(t){
+    ((t+1)^(-beta-1))/q_mass
   })
-  return(-sum(log(qb_i)))
+  return(-sum(log(q_i)))
 }
 
 beta_hat <- nlminb(start = 0.01,
-                   objective = qb_y_model,
+                   objective = q_model,
                    upper = Inf, lower = 0)$par
 
 q <- function(x)
 {
-  qb_mass <- (1/beta_hat)*((l+1)^(-beta_hat) - (u+1)^(-beta_hat))
-  ((x+1)^(-beta_hat-1))/qb_mass
+  q_mass <- (1/beta_hat)*((l+1)^(-beta_hat) - (u+1)^(-beta_hat))
+  ((x+1)^(-beta_hat-1))/q_mass
 }
 # Figuring out (mu_s -d, mu_s + d) that covers an area of 1-eps:
 find_d <- function(d)
@@ -66,34 +66,36 @@ sol <- uniroot(find_d, lower = 0, upper = min(log(mean_sig) - l,u - log(mean_sig
 
 r <- sol$root
 
-M_lower <- log(mean_sig) - r
-M_upper <- log(mean_sig) + r
+M_lower <- log(mean_sig) - r # mu_s - d
+M_upper <- log(mean_sig) + r # mu_s + d
 
-# PROPOSAL BACKGROUND DENSITY:
-mean1_in_gb <- (M_lower + log(mean_sig))/2
-mean2_in_gb <- (M_upper + log(mean_sig))/2
-# mean1_in_gb <- M_lower
-# mean2_in_gb <- M_upper
+# constructing the proposal background g:
+# means of the Gaussian components to mix with q_\alpha
+mean1_in_gb <- (M_lower + log(mean_sig))/2 # location of the first Gaussian component in g
+mean2_in_gb <- (M_upper + log(mean_sig))/2 # location of the second Gaussian component in g
+
 sig_fs <- sqrt(integrate(function(x) {(x^2)*fs(x)}, l, u)$value - integrate(function(x) {(x)*fs(x)}, l, u)$value^2)
-sd_in_gb <- 3*sig_fs
+sd_in_gb <- 3*sig_fs # SD for the Gaussian components
 
-lambda_seq <- c(0, 0.01, 0.03, 0.05, 0.07)
-
+lambda_seq <- c(0, 0.01, 0.03, 0.05, 0.07) # lambda values to perform sensitivity analysis on
 ######### Plotting Densities ###################################################
-
+# defining the proposal background g_\beta with a dominating component 
+# on top of the estimated benchmark density
 g <- function(y, lambda){
   q <- q(y)
   fs_val1 <- dtrunc(y, spec = 'norm', a = l, b = u,
-                    mean = mean1_in_gb, sd = sd_in_gb)
+                    mean = mean1_in_gb, sd = sd_in_gb) # first Gaussian component in g
   fs_val2 <- dtrunc(y, spec = 'norm', a = l, b = u,
-                    mean = mean2_in_gb, sd = sd_in_gb)
-  gb <- lambda*(fs_val1+fs_val2) + (1-2*lambda)*q
+                    mean = mean2_in_gb, sd = sd_in_gb) # second Gaussian component in g
+  gb <- lambda*(fs_val1+fs_val2) + (1-2*lambda)*q # mixing the benchmark model with the Gaussian components
   return(gb)
 }
 
+# Generating the plot for the sensitivity analysis
 op <- par(no.readonly = TRUE)
 par(mar = c(5,5,3,2),
     mgp = c(2.5,1,0))
+# scqtterplot of the physics data
 plot(x = xi, y = ni,
      main = '', 
      ylab = 'Counts',
@@ -103,10 +105,10 @@ plot(x = xi, y = ni,
      cex.lab = 2,
      cex.axis = 2,
      ylim = c(0, max(ni)+10))
-
 mycols <- c('cyan4', 'brown', 'darkgreen', 'orange', 'purple')
 palette(mycols)
 my_lty <- c(1,2,6,5,4)
+# plotting g_{\hat\beta} with different sizes for the dominating component, scaled appropriately to overlay on the scatterplot
 for(j in 1:length(lambda_seq))
 {
   curve(N*g(x, lambda = lambda_seq[j])*(u-l)/(k+1),
@@ -114,6 +116,7 @@ for(j in 1:length(lambda_seq))
         col = mycols[j],
         lty = my_lty[j])
 }
+# highlighting the signal region
 abline(v = c(M_lower, M_upper), col = 'grey', lty = 2, lwd = 4)
 rect(
   xleft   = M_lower,
@@ -123,7 +126,7 @@ rect(
   col     = rgb(0, 1, 0, 0.2),
   border  = NA
 )
-
+# generating legends
 legend(x = 0.95, y = 110,
        col = mycols,
        lty = my_lty, bty = 'n', lwd = 4,
